@@ -1,14 +1,8 @@
-"use client";
-import { useEffect, useState } from "react";
-import { getProducts, ShopifyProduct } from "../../../lib/shopify";
 import Image from "next/image";
+import { getProducts, ShopifyProduct } from "../../../lib/shopify";
 
-export default function ShopifyPage() {
-  const [products, setProducts] = useState<ShopifyProduct[]>([]);
-
-  useEffect(() => {
-    getProducts().then(setProducts);
-  }, []);
+export default async function ShopifyPage() {
+  const products: ShopifyProduct[] = await getProducts(); // ✅ Server-Side Fetching
 
   return (
     <div>
@@ -23,6 +17,7 @@ export default function ShopifyPage() {
                 alt={product.title}
                 width={200}
                 height={200}
+                unoptimized // 🚀 Optional: Removes Next.js optimization if images fail to load
               />
               <p>Price: ${product.price}</p>
             </li>
@@ -34,4 +29,3 @@ export default function ShopifyPage() {
     </div>
   );
 }
-//API Token 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

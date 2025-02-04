@@ -1,7 +1,12 @@
-export default function ShopifyPage() {
+import Link from "next/link";
+
+export default function HomePage() {
   return (
     <div>
-      <h1>Hello from Shopify Page</h1>
+      <h1>Welcome to My Shopify App</h1>
+      <Link href="/shopify-page">
+        <button>Products</button>
+      </Link>
     </div>
   );
 }
