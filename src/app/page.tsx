@@ -1,13 +1,16 @@
 import Link from "next/link";
-import Head from "next/head";
+
+export const metadata = {
+  title: "NCV - Compare Tool",
+  description: "Compare vaping products from New City Vapes",
+  icons: {
+    icon: "/favicon.ico", // Path to your new favicon
+  },
+};
 
 export default function HomePage() {
   return (
     <div>
-      <Head>
-        <title>NCV Compare Tool</title>
-        <link rel="icon" href="/NCV_favicon_light.png" />
-      </Head>
       <h1>Welcome to My Compare tool App</h1>
       <Link href="/shopify-page">
         <button>Products</button>
