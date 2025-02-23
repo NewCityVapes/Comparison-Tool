@@ -20,22 +20,60 @@ export type ShopifyAPIResponse = {
                     id: string;
                     title: string;
                     vendor: string;
+                    productType: string;
                     featuredImage?: { url: string } | null;
                     variants: {
                         edges: { node: { price: string } }[];
                     };
                 };
             }[];
+            pageInfo: { // ✅ Added this
+                hasNextPage: boolean;
+                endCursor: string | null;
+            };
         };
     };
 };
 
 
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
   
 
 let cachedVendors: string[] | null = null;
 let vendorCacheTimestamp: number | null = null;
 const VENDOR_CACHE_EXPIRATION = 10 * 60 * 1000; // 10 minutes
+
+async function fetchWithRetry<T>(query: string, retries = 5): Promise<T> {
+
+    for (let i = 0; i < retries; i++) {
+        const response: Response = await fetch(SHOPIFY_API_URL, {
+            method: "POST",
+            headers: {
+                "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ query })
+        });
+
+        if (response.ok) {
+            return response.json(); // ✅ Correct way to return API data
+        }
+
+        // ✅ Handle Rate Limiting
+        if (response.status === 429) {
+            const waitTime = (60 / 100) * (i + 1) * 1000; // Exponential backoff
+            console.warn(`⚠️ Shopify API Throttled. Retrying in ${waitTime / 1000} seconds...`);
+            await sleep(waitTime);
+            continue;
+        }
+
+        console.error(`❌ Shopify API Error: ${response.statusText}`);
+    }
+
+    throw new Error("❌ Shopify API Throttled. Max retries reached.");
+}
 
 export async function fetchVendors(): Promise<string[]> {
     const now = Date.now();
@@ -47,16 +85,17 @@ export async function fetchVendors(): Promise<string[]> {
 
     console.log("🚀 Fetching All Vendors from Shopify API...");
 
-    let vendors: string[] = [];
+    const vendors = new Set<string>(); // ✅ Deduplicate vendors automatically
     let hasNextPage = true;
     let endCursor: string | null = null;
 
     try {
         while (hasNextPage) {
-            const query: string = `
+            await sleep(500); // ✅ Prevent rate limits
 
+            const query: string = `
                 {
-                    products(first: 50, after: ${endCursor ? `"${endCursor}"` : "null"}) {
+                    products(first: 250, after: ${endCursor ? `"${endCursor}"` : "null"}) {
                         edges {
                             node {
                                 vendor
@@ -71,54 +110,43 @@ export async function fetchVendors(): Promise<string[]> {
                 }
             `;
 
-            const response = await fetch(SHOPIFY_API_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || ""
-                },
-                body: JSON.stringify({ query })
-            });
+            const data = await fetchWithRetry<ShopifyAPIResponse>(query);
 
-            if (!response.ok) {
-                throw new Error(`Shopify API Error: ${response.status}`);
-            }
 
-            const data = await response.json();
-
-            if (!data.data || !data.data.products) {
+            if (!data || !data.data || !data.data.products) {
                 console.error("❌ Shopify API did not return products.");
                 throw new Error("Shopify API response is missing 'products'.");
             }
 
-            // ✅ Extract unique vendors only from DISPOSABLES product type
+            // ✅ Filter by productType === "DISPOSABLES" and remove duplicates
             const newVendors = data.data.products.edges
-                .filter((p: { node: { productType: string } }) => p.node.productType === "DISPOSABLES")
-                .map((p: { node: { vendor: string } }) => p.node.vendor.trim());
+                .filter((p: { node: { productType: string } }) => p.node.productType === "DISPOSABLES") // ✅ Filter
+                .map((p: { node: { vendor: string } }) => p.node.vendor.trim()); // ✅ Extract vendor names
 
-            vendors = [...new Set([...vendors, ...newVendors])]; // ✅ Combine & remove duplicates
+            newVendors.forEach((vendor: string) => vendors.add(vendor)); // ✅ Add to Set (removes duplicates)
 
             hasNextPage = data.data.products.pageInfo.hasNextPage;
             endCursor = data.data.products.pageInfo.endCursor;
 
-            console.log(`🚀 Fetched ${newVendors.length} Vendors. Total Cached: ${vendors.length}`);
+            console.log(`🚀 Fetched ${newVendors.length} Vendors. Total Cached: ${vendors.size}`);
         }
 
-        cachedVendors = vendors;
+        // ✅ Convert Set to Array and Sort Alphabetically
+        cachedVendors = Array.from(vendors).sort((a, b) => a.localeCompare(b));
         vendorCacheTimestamp = now;
 
-        console.log("🔥 All Vendors Cached:", vendors.length);
-        return vendors;
+        console.log("🔥 All Vendors Cached (Sorted Alphabetically):", cachedVendors.length);
+        return cachedVendors;
     } catch (error) {
         console.error("❌ Error Fetching Vendors:", error);
         return [];
     }
 }
-
   
 
 
-let cachedProducts: ShopifyProduct[] = []; // ✅ Explicitly set type
+// ✅ Product Caching
+let cachedProducts: ShopifyProduct[] = [];
 let cacheTimestamp: number | null = null;
 const CACHE_EXPIRATION_TIME = 10 * 60 * 1000; // 10 minutes
 
@@ -128,82 +156,97 @@ export async function getProducts(): Promise<ShopifyProduct[]> {
         console.log("⚡ Using Cached Products");
         return cachedProducts;
     }
-    console.log("🚀 Fetching fresh products from Shopify API...");
-    cacheTimestamp = now; // ✅ Update cache timestamp
-    console.log("🚀 Fetching all products from Shopify API...");
+
+    console.log("🚀 Fetching Products (Caching Enabled)...");
 
     let allProducts: ShopifyProduct[] = [];
     let hasNextPage = true;
-    let endCursor: string | null = null;
+    let endCursor: string | undefined;
+
 
     try {
         while (hasNextPage) {
-            const query: string = `
-                {
-                    products(first: 50, after: ${endCursor ? `"${endCursor}"` : "null"}) {
+            // ✅ Fetch 3 pages at once for speed improvement
+            const queries = [...Array(3)].map(() => {
+                const query: string = `
+    {
+        products(first: 250, after: ${endCursor ? `"${endCursor}"` : "null"}) {
+            edges {
+                node {
+                    id
+                    title
+                    vendor
+                    featuredImage {
+                        url
+                    }
+                    variants(first: 1) {
                         edges {
                             node {
-                                id
-                                title
-                                vendor
-                                featuredImage {
-                                    url
-                                }
-                                variants(first: 1) {
-                                    edges {
-                                        node {
-                                            price
-                                        }
-                                    }
-                                }
+                                price
                             }
-                        }
-                        pageInfo {
-                            hasNextPage
-                            endCursor
                         }
                     }
                 }
-            `;
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
+    }
+`;
 
-            const response = await fetch(SHOPIFY_API_URL, {
-                method: "POST",
-                headers: {
-                    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ query })
+                return fetch(SHOPIFY_API_URL, {
+                    method: "POST",
+                    headers: {
+                        "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ query })
+                }).then((res) => res.json());
             });
 
-            if (!response.ok) {
-                console.error("❌ Shopify API Error:", response.statusText);
-                throw new Error(`Failed to fetch: ${response.statusText}`);
+            const responses = await Promise.all(queries);
+
+            for (const data of responses) {
+                if (!data || !data.data) {
+                    console.error("❌ No data returned from Shopify API.");
+                    console.error("🔥 Full API Response:", JSON.stringify(data, null, 2));
+                    throw new Error("Shopify API response is missing 'data'.");
+                }
+                
+                if (!data.data.products) {
+                    console.error("❌ 'products' field is missing in API response.");
+                    console.error("🔥 Full API Response:", JSON.stringify(data, null, 2));
+                    throw new Error("Shopify API response is missing 'products'.");
+                }
+                
+
+                const products = (data as ShopifyAPIResponse).data.products.edges.map(({ node }) => ({
+                    id: node.id,
+                    title: node.title,
+                    vendor: node.vendor.trim(),
+                    image: node.featuredImage?.url || "/fallback.jpg",
+                    price: node.variants?.edges?.[0]?.node?.price || "0.00",
+                    variants: node.variants?.edges.map((v) => ({ price: v.node.price })) || []
+                }));
+
+                allProducts = [...allProducts, ...products];
+
+                hasNextPage = data.data.products.pageInfo.hasNextPage;
+                endCursor = data.data.products.pageInfo.endCursor || undefined;
+
+
+                if (!hasNextPage) break;
             }
-
-            const data = await response.json();
-
-            if (!data.data || !data.data.products) {
-                console.error("❌ Shopify API did not return products.");
-                throw new Error("Shopify API response is missing 'products'.");
-            }
-
-            const products = (data as ShopifyAPIResponse).data.products.edges.map(({ node }) => ({
-                id: node.id,
-                title: node.title,
-                vendor: node.vendor.trim(),
-                image: node.featuredImage?.url || "/fallback.jpg",
-                price: node.variants?.edges?.[0]?.node?.price || "0.00",
-                variants: node.variants?.edges.map((v) => ({ price: v.node.price })) || []
-            }));
-
-            allProducts = [...allProducts, ...products]; // ✅ Append new batch to allProducts
-
-            hasNextPage = data.data.products.pageInfo.hasNextPage;
-            endCursor = data.data.products.pageInfo.endCursor;
         }
 
-        cachedProducts = allProducts; // ✅ Cache all fetched products
-        console.log("🔥 Total Products Cached:", cachedProducts.length);
+        cachedProducts = allProducts;
+        cacheTimestamp = now;
+
+        console.log(`✅ Products Cached: ${cachedProducts.length}`);
+
+
         return cachedProducts;
     } catch (error) {
         console.error("❌ Error fetching Shopify products:", error);
@@ -211,26 +254,25 @@ export async function getProducts(): Promise<ShopifyProduct[]> {
     }
 }
 
+// ✅ Fetch Vendors & Products in Parallel
 export async function fetchVendorsAndProducts(): Promise<{ vendors: string[]; products: ShopifyProduct[] }> {
     console.log("🚀 Fetching Vendors & Products in Parallel...");
 
-    const vendorsPromise = fetchVendors(); // ✅ Start fetching vendors
-    const productsPromise = getProducts(); // ✅ Start fetching products
+    const vendorsPromise = fetchVendors();
+    const productsPromise = getProducts();
 
-    const [vendors, products] = await Promise.all([vendorsPromise, productsPromise]); // ✅ Run in parallel
+    const [vendors, products] = await Promise.all([vendorsPromise, productsPromise]);
 
     console.log("✅ Vendors and Products Fetched");
     return { vendors, products };
 }
 
+// ✅ Preload Vendors & Products on Startup
 export async function preloadData() {
     console.log("🚀 Preloading Vendors & Products...");
 
     try {
-        const [vendors, products] = await Promise.all([
-            fetchVendors(), // ✅ Fetch vendors
-            getProducts() // ✅ Fetch products
-        ]);
+        const [vendors, products] = await Promise.all([fetchVendors(), getProducts()]);
 
         console.log("✅ Preloaded Vendors:", vendors.length);
         console.log("✅ Preloaded Products:", products.length);
@@ -238,3 +280,4 @@ export async function preloadData() {
         console.error("❌ Error Preloading Data:", error);
     }
 }
+
