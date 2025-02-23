@@ -6,7 +6,8 @@ export default async function ShopifyPage() {
 
   return (
     <div>
-      <h1>Shopify Products</h1>
+      <h1>New City Vapes</h1>
+      <h2>Compare Disposables Tool</h2>
       <ul>
         {products.length > 0 ? (
           products.map((product: ShopifyProduct) => (

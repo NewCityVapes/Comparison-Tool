@@ -6,10 +6,17 @@ export default async function ShopifyPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Shopify Products</h1>
+      <h1 className="text-2xl font-bold mb-4">New City Vapes</h1>
+      <h2 className="text-2xl font-bold mb-4">Disposables Compare Tool</h2>
 
-      {/* ✅ Pass filtered vendors to the Client Component */}
-      <VendorDropdown vendors={vendors} />
+      <div className="flex min-h-screen items-start p-6 space-x-6">
+        {" "}
+        {/* ✅ Flex container with spacing */}
+        {/* ✅ Left dropdown */}
+        <VendorDropdown vendors={vendors} />
+        {/* ✅ Right dropdown (duplicated) */}
+        <VendorDropdown vendors={vendors} />
+      </div>
     </div>
   );
 }

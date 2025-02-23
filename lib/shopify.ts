@@ -94,7 +94,7 @@ export async function fetchVendors(): Promise<string[]> {
         endCursor = result.data.products.pageInfo.endCursor;
     }
 
-    return [...new Set(vendors)]; // ✅ Ensure unique vendors
+    return [...new Set(vendors)].sort((a, b) => a.localeCompare(b));
 }
   
   
