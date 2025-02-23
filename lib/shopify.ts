@@ -1,3 +1,11 @@
+import getConfig from "next/config";
+
+const { publicRuntimeConfig } = getConfig();
+
+
+const SHOPIFY_API_URL = `https://${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`;
+const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
+
 export type ShopifyProduct = {
     id: string;
     title: string;
@@ -6,9 +14,66 @@ export type ShopifyProduct = {
     variants: { node: { price: string } }[]; // ✅ Fix: Define `variants` properly
     featuredImage?: { url: string } | null; // ✅ Fix: Properly define `featuredImage`
   };
+
+  interface ShopifyResponse {
+    data: {
+        products: {
+            edges: Array<{
+                node: {
+                    vendor: string;
+                };
+            }>;
+        };
+    };
+}
   
-  
-  
+
+
+export async function fetchVendors(): Promise<string[]> {
+    if (!SHOPIFY_API_URL || !SHOPIFY_ACCESS_TOKEN) {
+        throw new Error("🚨 Missing Shopify API credentials. Check your environment variables.");
+    }
+
+    console.log("Fetching vendors from:", SHOPIFY_API_URL);
+
+    const response = await fetch(SHOPIFY_API_URL, {
+        method: "POST", // ✅ Shopify GraphQL API requires POST
+        headers: {
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN // ✅ Correct authentication header
+        },
+        body: JSON.stringify({
+            query: `
+                {
+                    products(first: 10) {
+                        edges {
+                            node {
+                                vendor
+                            }
+                        }
+                    }
+                }
+            `
+        })
+    });
+
+    console.log("Response status:", response.status);
+
+    if (!response.ok) {
+        const errorMessage = await response.text();
+        console.error("❌ Shopify API Error:", errorMessage);
+        throw new Error(`API request failed with status ${response.status}`);
+    }
+
+    const result: ShopifyResponse = await response.json();
+    console.log("API Response:", result); // ✅ Debugging log
+
+    if (!result.data || !result.data.products) {
+        throw new Error("Invalid API response structure");
+    }
+
+    return [...new Set(result.data.products.edges.map((product) => product.node.vendor))];
+}
   
   
   export async function getProducts(): Promise<ShopifyProduct[]> {
