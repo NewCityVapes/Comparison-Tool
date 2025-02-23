@@ -1,8 +1,4 @@
 
-
-
-
-
 const SHOPIFY_API_URL = `https://${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 
@@ -21,13 +17,13 @@ export type ShopifyProduct = {
             edges: Array<{
                 node: {
                     vendor: string;
+                    productType: string; // ✅ Add productType here
                 };
             }>;
         };
     };
 }
   
-
 
 export async function fetchVendors(): Promise<string[]> {
     if (!SHOPIFY_API_URL || !SHOPIFY_ACCESS_TOKEN) {
@@ -37,7 +33,7 @@ export async function fetchVendors(): Promise<string[]> {
     console.log("Fetching vendors from:", SHOPIFY_API_URL);
 
     const response = await fetch(SHOPIFY_API_URL, {
-        method: "POST", // ✅ Shopify GraphQL API requires POST
+        method: "POST",
         headers: {
             "Content-Type": "application/json",
             "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN // ✅ Correct authentication header
@@ -45,10 +41,11 @@ export async function fetchVendors(): Promise<string[]> {
         body: JSON.stringify({
             query: `
                 {
-                    products(first: 10) {
+                    products(first: 50) {
                         edges {
                             node {
                                 vendor
+                                productType
                             }
                         }
                     }
@@ -72,7 +69,12 @@ export async function fetchVendors(): Promise<string[]> {
         throw new Error("Invalid API response structure");
     }
 
-    return [...new Set(result.data.products.edges.map((product) => product.node.vendor))];
+    // ✅ Filter vendors where productType is "DISPOSABLES"
+    const disposableVendors = result.data.products.edges
+        .filter((product) => product.node.productType === "DISPOSABLES")
+        .map((product) => product.node.vendor);
+
+    return [...new Set(disposableVendors)]; // ✅ Ensure unique vendors
 }
   
   
