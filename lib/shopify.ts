@@ -5,11 +5,30 @@ const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 export type ShopifyProduct = {
     id: string;
     title: string;
+    vendor: string;
     image: string;
     price: string;
-    variants: { node: { price: string } }[]; // ✅ Fix: Define `variants` properly
-    featuredImage?: { url: string } | null; // ✅ Fix: Properly define `featuredImage`
-  };
+    variants: { price: string }[]; // ✅ Ensure this matches your final mapped structure
+};
+
+
+export type ShopifyAPIResponse = {
+    data: {
+        products: {
+            edges: {
+                node: {
+                    id: string;
+                    title: string;
+                    vendor: string;
+                    featuredImage?: { url: string } | null;
+                    variants: {
+                        edges: { node: { price: string } }[];
+                    };
+                };
+            }[];
+        };
+    };
+};
 
   interface ShopifyResponse {
     data: {
@@ -97,59 +116,91 @@ export async function fetchVendors(): Promise<string[]> {
     return [...new Set(vendors)].sort((a, b) => a.localeCompare(b));
 }
   
-  
-  export async function getProducts(): Promise<ShopifyProduct[]> {
-    console.log("Fetching products from Shopify API...");
-  
+
+
+let cachedProducts: ShopifyProduct[] = []; // ✅ Explicitly set type
+
+export async function getProducts(): Promise<ShopifyProduct[]> {
+    if (cachedProducts.length > 0) {  // ✅ Return cached data instantly
+        console.log("⚡ Using Cached Products");
+        return cachedProducts;
+    }
+
+    console.log("🚀 Fetching all products from Shopify API...");
+
+    let allProducts: ShopifyProduct[] = [];
+    let hasNextPage = true;
+    let endCursor: string | null = null;
+
     try {
-        const response = await fetch(
-            `https://${process.env.NEXT_PUBLIC_SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
-            {
-                method: "POST",
-                headers: {
-                    "X-Shopify-Access-Token": process.env.NEXT_PUBLIC_SHOPIFY_ADMIN_API_KEY || "",
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    query: `
-                        {
-                            products(first: 5) {
-                                edges {
-                                    node {
-                                        id
-                                        title
-                                        featuredImage {
-                                            url
-                                        }
-                                        variants(first: 1) {
-                                            edges {
-                                                node {
-                                                    price
-                                                }
-                                            }
+        while (hasNextPage) {
+            const query: string = `
+                {
+                    products(first: 50, after: ${endCursor ? `"${endCursor}"` : "null"}) {
+                        edges {
+                            node {
+                                id
+                                title
+                                vendor
+                                featuredImage {
+                                    url
+                                }
+                                variants(first: 1) {
+                                    edges {
+                                        node {
+                                            price
                                         }
                                     }
                                 }
                             }
                         }
-                    `
-                })
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                    }
+                }
+            `;
+
+            const response = await fetch(SHOPIFY_API_URL, {
+                method: "POST",
+                headers: {
+                    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ query })
+            });
+
+            if (!response.ok) {
+                console.error("❌ Shopify API Error:", response.statusText);
+                throw new Error(`Failed to fetch: ${response.statusText}`);
             }
-        );
-  
-        if (!response.ok) {
-            console.error("❌ Shopify API Error:", response.statusText);
-            throw new Error(`Failed to fetch: ${response.statusText}`);
+
+            const data = await response.json();
+
+            if (!data.data || !data.data.products) {
+                console.error("❌ Shopify API did not return products.");
+                throw new Error("Shopify API response is missing 'products'.");
+            }
+
+            const products = (data as ShopifyAPIResponse).data.products.edges.map(({ node }) => ({
+                id: node.id,
+                title: node.title,
+                vendor: node.vendor.trim(),
+                image: node.featuredImage?.url || "/fallback.jpg",
+                price: node.variants?.edges?.[0]?.node?.price || "0.00",
+                variants: node.variants?.edges.map((v) => ({ price: v.node.price })) || []
+            }));
+
+            allProducts = [...allProducts, ...products]; // ✅ Append new batch to allProducts
+
+            hasNextPage = data.data.products.pageInfo.hasNextPage;
+            endCursor = data.data.products.pageInfo.endCursor;
         }
-  
-        const data = await response.json();
-        return data.data.products.edges.map(({ node }: { node: ShopifyProduct }) => ({
-            id: node.id,
-            title: node.title,
-            image: node.featuredImage?.url || "/fallback.jpg",
-            price: node.variants?.[0]?.node?.price || "0.00", // ✅ Fix: Properly extract variant price
-            variants: node.variants || [] // ✅ Fix: Prevent TypeScript errors
-        }));
+
+        cachedProducts = allProducts; // ✅ Cache all fetched products
+        console.log("🔥 Total Products Cached:", cachedProducts.length);
+        return cachedProducts;
     } catch (error) {
         console.error("❌ Error fetching Shopify products:", error);
         return [];
