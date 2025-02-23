@@ -46,9 +46,8 @@ let vendorCacheTimestamp: number | null = null;
 const VENDOR_CACHE_EXPIRATION = 10 * 60 * 1000; // 10 minutes
 
 async function fetchWithRetry<T>(query: string, retries = 5): Promise<T> {
-
     for (let i = 0; i < retries; i++) {
-        const response: Response = await fetch(SHOPIFY_API_URL, {
+        const response = await fetch(SHOPIFY_API_URL, {
             method: "POST",
             headers: {
                 "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
@@ -57,13 +56,12 @@ async function fetchWithRetry<T>(query: string, retries = 5): Promise<T> {
             body: JSON.stringify({ query })
         });
 
-        if (response.ok) {
-            return response.json(); // ✅ Correct way to return API data
-        }
+        if (response.ok) return response.json(); // ✅ Return data if successful
 
-        // ✅ Handle Rate Limiting
+        // ✅ Handle Rate Limiting - Check Shopify's retry-after header
         if (response.status === 429) {
-            const waitTime = (60 / 100) * (i + 1) * 1000; // Exponential backoff
+            const retryAfter = response.headers.get("Retry-After");
+            const waitTime = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(5000 * (i + 1), 30000);
             console.warn(`⚠️ Shopify API Throttled. Retrying in ${waitTime / 1000} seconds...`);
             await sleep(waitTime);
             continue;
@@ -75,25 +73,23 @@ async function fetchWithRetry<T>(query: string, retries = 5): Promise<T> {
     throw new Error("❌ Shopify API Throttled. Max retries reached.");
 }
 
+
 export async function fetchVendors(): Promise<string[]> {
     const now = Date.now();
-    
     if (cachedVendors && vendorCacheTimestamp && now - vendorCacheTimestamp < VENDOR_CACHE_EXPIRATION) {
         console.log("⚡ Using Cached Vendors");
         return cachedVendors;
     }
 
     console.log("🚀 Fetching All Vendors from Shopify API...");
-
-    const vendors = new Set<string>(); // ✅ Deduplicate vendors automatically
+    const vendors = new Set<string>(); 
     let hasNextPage = true;
     let endCursor: string | null = null;
 
     try {
         while (hasNextPage) {
-            await sleep(500); // ✅ Prevent rate limits
-
-            const query: string = `
+            const queries = [...Array(3)].map(() => {
+                return `
                 {
                     products(first: 250, after: ${endCursor ? `"${endCursor}"` : "null"}) {
                         edges {
@@ -108,41 +104,35 @@ export async function fetchVendors(): Promise<string[]> {
                         }
                     }
                 }
-            `;
+                `;
+            });
 
-            const data = await fetchWithRetry<ShopifyAPIResponse>(query);
+            // ✅ Run 3 requests in parallel to speed up pagination
+            const responses = await Promise.all(queries.map(query => fetchWithRetry<ShopifyAPIResponse>(query)));
 
+            for (const data of responses) {
+                if (!data || !data.data || !data.data.products) continue;
 
-            if (!data || !data.data || !data.data.products) {
-                console.error("❌ Shopify API did not return products.");
-                throw new Error("Shopify API response is missing 'products'.");
+                // ✅ Extract vendors that match "DISPOSABLES"
+                data.data.products.edges
+                    .filter(p => p.node.productType === "DISPOSABLES")
+                    .forEach(p => vendors.add(p.node.vendor.trim()));
+
+                hasNextPage = data.data.products.pageInfo.hasNextPage;
+                endCursor = data.data.products.pageInfo.endCursor || null;
             }
-
-            // ✅ Filter by productType === "DISPOSABLES" and remove duplicates
-            const newVendors = data.data.products.edges
-                .filter((p: { node: { productType: string } }) => p.node.productType === "DISPOSABLES") // ✅ Filter
-                .map((p: { node: { vendor: string } }) => p.node.vendor.trim()); // ✅ Extract vendor names
-
-            newVendors.forEach((vendor: string) => vendors.add(vendor)); // ✅ Add to Set (removes duplicates)
-
-            hasNextPage = data.data.products.pageInfo.hasNextPage;
-            endCursor = data.data.products.pageInfo.endCursor;
-
-            console.log(`🚀 Fetched ${newVendors.length} Vendors. Total Cached: ${vendors.size}`);
         }
 
-        // ✅ Convert Set to Array and Sort Alphabetically
-        cachedVendors = Array.from(vendors).sort((a, b) => a.localeCompare(b));
+        cachedVendors = Array.from(vendors).sort();
         vendorCacheTimestamp = now;
-
-        console.log("🔥 All Vendors Cached (Sorted Alphabetically):", cachedVendors.length);
+        console.log(`✅ Vendors Cached: ${cachedVendors.length}`);
         return cachedVendors;
     } catch (error) {
         console.error("❌ Error Fetching Vendors:", error);
         return [];
     }
 }
-  
+
 
 
 // ✅ Product Caching
@@ -157,87 +147,60 @@ export async function getProducts(): Promise<ShopifyProduct[]> {
         return cachedProducts;
     }
 
-    console.log("🚀 Fetching Products (Caching Enabled)...");
+    console.log("🚀 Fetching Products...");
 
-    let allProducts: ShopifyProduct[] = [];
+    const allProducts: ShopifyProduct[] = [];
     let hasNextPage = true;
     let endCursor: string | undefined;
 
-
     try {
         while (hasNextPage) {
-            // ✅ Fetch 3 pages at once for speed improvement
             const queries = [...Array(3)].map(() => {
-                const query: string = `
-    {
-        products(first: 250, after: ${endCursor ? `"${endCursor}"` : "null"}) {
-            edges {
-                node {
-                    id
-                    title
-                    vendor
-                    featuredImage {
-                        url
-                    }
-                    variants(first: 1) {
+                return `
+                {
+                    products(first: 250, after: ${endCursor ? `"${endCursor}"` : "null"}) {
                         edges {
                             node {
-                                price
+                                id
+                                title
+                                vendor
+                                featuredImage { url }
+                                variants(first: 1) {
+                                    edges {
+                                        node { price }
+                                    }
+                                }
                             }
+                        }
+                        pageInfo {
+                            hasNextPage
+                            endCursor
                         }
                     }
                 }
-            }
-            pageInfo {
-                hasNextPage
-                endCursor
-            }
-        }
-    }
-`;
-
-                return fetch(SHOPIFY_API_URL, {
-                    method: "POST",
-                    headers: {
-                        "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN || "",
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ query })
-                }).then((res) => res.json());
+                `;
             });
 
-            const responses = await Promise.all(queries);
+            // ✅ Run 3 requests in parallel
+            const responses = await Promise.all(queries.map(query => fetchWithRetry<ShopifyAPIResponse>(query)));
 
             for (const data of responses) {
-                if (!data || !data.data) {
-                    console.error("❌ No data returned from Shopify API.");
-                    console.error("🔥 Full API Response:", JSON.stringify(data, null, 2));
-                    throw new Error("Shopify API response is missing 'data'.");
-                }
-                
-                if (!data.data.products) {
-                    console.error("❌ 'products' field is missing in API response.");
-                    console.error("🔥 Full API Response:", JSON.stringify(data, null, 2));
-                    throw new Error("Shopify API response is missing 'products'.");
-                }
-                
+                if (!data || !data.data?.products) continue;
 
-                const products = (data as ShopifyAPIResponse).data.products.edges.map(({ node }) => ({
+                // ✅ Map data to expected format
+                const products = data.data.products.edges.map(({ node }) => ({
                     id: node.id,
                     title: node.title,
                     vendor: node.vendor.trim(),
                     image: node.featuredImage?.url || "/fallback.jpg",
                     price: node.variants?.edges?.[0]?.node?.price || "0.00",
-                    variants: node.variants?.edges.map((v) => ({ price: v.node.price })) || []
+                    variants: node.variants?.edges.map(v => ({ price: v.node.price })) || []
                 }));
 
-                allProducts = [...allProducts, ...products];
+                allProducts.push(...products);
 
                 hasNextPage = data.data.products.pageInfo.hasNextPage;
                 endCursor = data.data.products.pageInfo.endCursor || undefined;
-
-
-                if (!hasNextPage) break;
             }
         }
 
@@ -245,8 +208,6 @@ export async function getProducts(): Promise<ShopifyProduct[]> {
         cacheTimestamp = now;
 
         console.log(`✅ Products Cached: ${cachedProducts.length}`);
-
-
         return cachedProducts;
     } catch (error) {
         console.error("❌ Error fetching Shopify products:", error);
@@ -254,14 +215,11 @@ export async function getProducts(): Promise<ShopifyProduct[]> {
     }
 }
 
-// ✅ Fetch Vendors & Products in Parallel
+
 export async function fetchVendorsAndProducts(): Promise<{ vendors: string[]; products: ShopifyProduct[] }> {
     console.log("🚀 Fetching Vendors & Products in Parallel...");
 
-    const vendorsPromise = fetchVendors();
-    const productsPromise = getProducts();
-
-    const [vendors, products] = await Promise.all([vendorsPromise, productsPromise]);
+    const [vendors, products] = await Promise.all([fetchVendors(), getProducts()]);
 
     console.log("✅ Vendors and Products Fetched");
     return { vendors, products };
