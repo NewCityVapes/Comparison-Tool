@@ -1,6 +1,6 @@
-import getConfig from "next/config";
 
-const { publicRuntimeConfig } = getConfig();
+
+
 
 
 const SHOPIFY_API_URL = `https://${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`;

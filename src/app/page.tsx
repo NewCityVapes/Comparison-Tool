@@ -1,6 +1,5 @@
 import VendorDropdown from "@/app/components/VendorDropdown"; // ✅ Import Client Component
 
-import Link from "next/link";
 import { fetchVendors } from "../../lib/shopify";
 
 export default async function ShopifyPage() {
