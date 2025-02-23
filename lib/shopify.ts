@@ -17,9 +17,13 @@ export type ShopifyProduct = {
             edges: Array<{
                 node: {
                     vendor: string;
-                    productType: string; // ✅ Add productType here
+                    productType: string;
                 };
             }>;
+            pageInfo: { // ✅ Add pageInfo to match GraphQL response
+                hasNextPage: boolean;
+                endCursor: string;
+            };
         };
     };
 }
@@ -30,51 +34,67 @@ export async function fetchVendors(): Promise<string[]> {
         throw new Error("🚨 Missing Shopify API credentials. Check your environment variables.");
     }
 
-    console.log("Fetching vendors from:", SHOPIFY_API_URL);
+    console.log("Fetching all vendors from:", SHOPIFY_API_URL);
 
-    const response = await fetch(SHOPIFY_API_URL, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN // ✅ Correct authentication header
-        },
-        body: JSON.stringify({
-            query: `
-                {
-                    products(first: 50) {
-                        edges {
-                            node {
-                                vendor
-                                productType
+    const vendors: string[] = []; // ✅ Change `let` to `const`
+    let hasNextPage = true;
+    let endCursor = null;
+
+    while (hasNextPage) {
+        const response = await fetch(SHOPIFY_API_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN
+            },
+            body: JSON.stringify({
+                query: `
+                    {
+                        products(first: 50, after: ${endCursor ? `"${endCursor}"` : "null"}) {
+                            edges {
+                                node {
+                                    vendor
+                                    productType
+                                }
+                            }
+                            pageInfo {
+                                hasNextPage
+                                endCursor
                             }
                         }
                     }
-                }
-            `
-        })
-    });
+                `
+            })
+        });
 
-    console.log("Response status:", response.status);
+        console.log("Response status:", response.status);
 
-    if (!response.ok) {
-        const errorMessage = await response.text();
-        console.error("❌ Shopify API Error:", errorMessage);
-        throw new Error(`API request failed with status ${response.status}`);
+        if (!response.ok) {
+            const errorMessage = await response.text();
+            console.error("❌ Shopify API Error:", errorMessage);
+            throw new Error(`API request failed with status ${response.status}`);
+        }
+
+        const result: ShopifyResponse = await response.json();
+        console.log("API Response:", result);
+
+        if (!result.data || !result.data.products) {
+            throw new Error("Invalid API response structure");
+        }
+
+        // ✅ Extract vendors only if productType is "DISPOSABLES"
+        const newVendors = result.data.products.edges
+            .filter((product) => product.node.productType === "DISPOSABLES")
+            .map((product) => product.node.vendor);
+
+        vendors.push(...newVendors); // ✅ This is allowed because we're modifying the array content, not reassigning `vendors`
+
+        // ✅ Get next page information
+        hasNextPage = result.data.products.pageInfo.hasNextPage;
+        endCursor = result.data.products.pageInfo.endCursor;
     }
 
-    const result: ShopifyResponse = await response.json();
-    console.log("API Response:", result); // ✅ Debugging log
-
-    if (!result.data || !result.data.products) {
-        throw new Error("Invalid API response structure");
-    }
-
-    // ✅ Filter vendors where productType is "DISPOSABLES"
-    const disposableVendors = result.data.products.edges
-        .filter((product) => product.node.productType === "DISPOSABLES")
-        .map((product) => product.node.vendor);
-
-    return [...new Set(disposableVendors)]; // ✅ Ensure unique vendors
+    return [...new Set(vendors)]; // ✅ Ensure unique vendors
 }
   
   
