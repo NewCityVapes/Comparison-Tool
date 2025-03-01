@@ -13,13 +13,15 @@ preloadData()
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
-      <body>{children}</body>
-      <SpeedInsights /> {/* Add this component */}
+      <body>
+        {children}
+        <SpeedInsights /> {/* ✅ Removed unnecessary whitespace */}
+      </body>
     </html>
   );
 }
