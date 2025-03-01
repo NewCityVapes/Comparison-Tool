@@ -1,5 +1,6 @@
 import "./globals.css";
 import { preloadData } from "../../lib/shopify";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 // ✅ Run preload when the server starts
 preloadData()
@@ -18,6 +19,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>{children}</body>
+      <SpeedInsights /> {/* Add this component */}
     </html>
   );
 }
